@@ -35,6 +35,7 @@ $job = Start-Job -ScriptBlock {
         Process {
             [System.Win32Util]::PostMessage($hWnd, 0x100, [System.IntPtr]$key, [System.IntPtr]::Zero)
             [System.Win32Util]::PostMessage($hWnd, 0x101, [System.IntPtr]$key, [System.IntPtr]::Zero)
+
         }
     }
 
@@ -57,6 +58,18 @@ $job = Start-Job -ScriptBlock {
             [return: MarshalAs(UnmanagedType.Bool)]
             public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
             
+            [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+            [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.U2)]
+            public static extern short GetKeyState(int lpKeyState);
+
+
+            public static int RShift(int key, int count) { return key >> count; }
+
+
             public enum WM_EventFlag:uint
             {
                 WM_CHAR = 0x0102,
@@ -105,8 +118,8 @@ $job = Start-Job -ScriptBlock {
         # 1st Row: F1 .. F12
         $secondsWaiting = @{
             "20 mins ++" = New-Object PSOBJECT -Property @{ wait = (60 * 20 - 3); key = $VK::F9; start = $null }
-            "5 mins ++" = New-Object PSOBJECT -Property @{ wait = (60 * 5 - 3); key = $VK::F10; start = $null }
-            "6 sec attack" = New-Object PSOBJECT -Property @{ wait = (3); key = $VK::F11; start = $null }
+            "5 mins ++" = New-Object PSOBJECT -Property @{ wait = (60 * 5 + 6); key = $VK::F10; start = $null }
+            "6 sec attack" = New-Object PSOBJECT -Property @{ wait = (6); key = $VK::F11; start = $null }
         }
         
         
@@ -124,20 +137,30 @@ $job = Start-Job -ScriptBlock {
                 $thisObject = $secondsWaiting[$key]
                 if ($thisObject -eq $null -or $thisObject.key -eq 0) { continue; }
 
+                $status = "Processing"
                 $secondsRemaining = [int32] ($thisObject.wait - ((Get-Date) - $thisObject.start).TotalSeconds)
                 if ($secondsRemaining -le 0) {
                     $thisObject.start = Get-Date
 
-                    $l2Process | ForEach-Object {
-                        if ($_.MainWindowHandle -ne [System.IntPtr]::Zero) {
-                            Util-PressKey $_.MainWindowHandle $thisObject.key
+                    $isPressedAlt = [bool]([System.Win32Util]::GetKeyState(0x12) -band 0x80)
+                    if ($isPressedAlt -eq $true) {
+                        $thisObject.start = (Get-Date).AddSeconds(-$secondsWaiting[$key].wait + 6)
+                        $secondsRemainging = 6
+                        $status = "Hold"
+                    }
+                    else {
+                        $l2Process | ForEach-Object {
+                            if ($_.MainWindowHandle -ne [System.IntPtr]::Zero) {
+                                Util-PressKey $_.MainWindowHandle $thisObject.key
+                            }
                         }
                     }
 
                 }
                 
+
                 if ($switchProgress -eq $($secondsWaiting.Keys).IndexOf($key)) {
-                    Write-Progress -Activity $key -Status "Processing" -SecondsRemaining $secondsRemaining
+                    Write-Progress -Activity $key -Status $status -SecondsRemaining $secondsRemaining
                 }
             }
             
