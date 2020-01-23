@@ -17,7 +17,7 @@ $secondsWaiting = @{
 
 > Model
 ``` powershell
-**"20 mins ++"** = New-Object PSOBJECT -Property @{ **wait** = (60 * 20 - 3); **key** = $VK::F9; start = $null }
+"20 mins ++" = New-Object PSOBJECT -Property @{ wait = (60 * 20 - 3); key = $VK::F9; start = $null }
 ```
 
 **"Label"** = @{
