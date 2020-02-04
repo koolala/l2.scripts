@@ -40,6 +40,20 @@ $job = Start-Job -ScriptBlock {
     }
 
 
+    function L2Windows-Refresh {
+        [CmdletBinding()]
+        Param(
+            [Parameter(Mandatory)]
+            $hWnd
+        )
+
+        Process {
+            [System.Win32Util]::ShowWindowAsync($hWnd, 4)
+            Start-Sleep -Seconds 1
+            [System.Win32Util]::ShowWindowAsync($hWnd, 7)
+        }
+    }
+
 
     function Main {
 
@@ -65,10 +79,11 @@ $job = Start-Job -ScriptBlock {
             [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
             [return: MarshalAs(UnmanagedType.U2)]
             public static extern short GetKeyState(int lpKeyState);
-
-
-            public static int RShift(int key, int count) { return key >> count; }
-
+                        
+            [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+            
 
             public enum WM_EventFlag:uint
             {
@@ -100,16 +115,9 @@ $job = Start-Job -ScriptBlock {
         
         $VK = [System.Windows.Forms.Keys]
         
-        $l2Process = Get-Process -Name "L2.bin" -ErrorAction SilentlyContinue | Where-Object { [System.Win32Util]::IsIconic($_.MainWindowHandle) -eq $false }
-                
-        Write-Host "L2 Process: " @($l2Process).Count
-        if ($l2Process -eq $null -or @($l2Process).Count -le 0) { return }
-
-        $l2Process | ForEach-Object {
-            if ($_.MainWindowHandle -ne 0) {
-                Util-DisableMaxButton $_.MainWindowHandle
-            }
-        }
+        #=== Editable Setting ======================================
+        $refreshL2WindowsEnabled = $true
+        $fefreshL2WindowsExtendMinutes = 40
 
 
         # $VK options:
@@ -122,38 +130,78 @@ $job = Start-Job -ScriptBlock {
             "6 sec attack" = New-Object PSOBJECT -Property @{ wait = (6); key = $VK::F11; start = $null }
         }
         
-        
-        #=============================================================
+
+        #=== System Setting ====
         foreach($key in $secondsWaiting.keys) {
             $secondsWaiting[$key].start = (Get-Date).AddSeconds(-$secondsWaiting[$key].wait)
         }
 
+        $refreshL2Windows = (Get-Date).AddMinutes($fefreshL2WindowsExtendMinutes);
         
+
+        #=== Get L2 Process(es) ===
+        $l2Process = Get-Process -Name "L2.bin" -ErrorAction SilentlyContinue | Where-Object { [System.Win32Util]::IsIconic($_.MainWindowHandle) -eq $false }
+        
+
+
+        #=== Init Window ===        
+        Write-Host "L2 Process: " @($l2Process).Count
+        if ($l2Process -eq $null -or @($l2Process).Count -le 0) { return }
+
+        $l2Process | ForEach-Object {
+            if ($_.MainWindowHandle -ne 0) {
+                Util-DisableMaxButton $_.MainWindowHandle
+            }
+        }
+        
+
         $switchProgress = 0
         while($true) {
-                
+            
+            #=============================================================
+            if ($refreshL2WindowsEnabled -eq $true) {
+                $isRefreshL2Windows = [int32] ($refreshL2Windows - (Get-Date)).TotalSeconds
+            
+                if ($isRefreshL2Windows -le 0) {
+                    $l2Process | ForEach-Object {
+                        if ($_.MainWindowHandle -ne [System.IntPtr]::Zero) {
+                            if ([System.Win32Util]::IsIconic($_.MainWindowHandle)) {
+                                L2Windows-Refresh $_.MainWindowHandle
+                            }
+                        }
+                    }
+
+                    $refreshL2Windows = (Get-Date).AddMinutes($fefreshL2WindowsExtendMinutes);
+                }
+            }
+
             #=============================================================
             foreach($key in $secondsWaiting.keys) {
                 $thisObject = $secondsWaiting[$key]
                 if ($thisObject -eq $null -or $thisObject.key -eq 0) { continue; }
-
+                
                 $status = "Processing"
                 $secondsRemaining = [int32] ($thisObject.wait - ((Get-Date) - $thisObject.start).TotalSeconds)
+
                 if ($secondsRemaining -le 0) {
                     $thisObject.start = Get-Date
 
                     $isPressedAlt = [bool]([System.Win32Util]::GetKeyState(0x12) -band 0x80)
                     if ($isPressedAlt -eq $true) {
+                        
                         $thisObject.start = (Get-Date).AddSeconds(-$secondsWaiting[$key].wait + 6)
                         $secondsRemainging = 6
                         $status = "Hold"
+
                     }
                     else {
+
                         $l2Process | ForEach-Object {
                             if ($_.MainWindowHandle -ne [System.IntPtr]::Zero) {
                                 Util-PressKey $_.MainWindowHandle $thisObject.key
                             }
                         }
+
                     }
 
                 }
@@ -162,6 +210,7 @@ $job = Start-Job -ScriptBlock {
                 if ($switchProgress -eq $($secondsWaiting.Keys).IndexOf($key)) {
                     Write-Progress -Activity $key -Status $status -SecondsRemaining $secondsRemaining
                 }
+
             }
             
             #=============================================================
