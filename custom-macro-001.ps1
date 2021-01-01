@@ -25,6 +25,7 @@ $job = Start-Job -ScriptBlock {
         [CmdletBinding()]
         Param(
             [Parameter(Mandatory)]
+            [System.IntPtr]
             $hWnd,
 
             [Parameter(Mandatory)]
@@ -33,8 +34,14 @@ $job = Start-Job -ScriptBlock {
         )
 
         Process {
-            [System.Win32Util]::PostMessage($hWnd, 0x100, [System.IntPtr]$key, [System.IntPtr]::Zero)
-            [System.Win32Util]::PostMessage($hWnd, 0x101, [System.IntPtr]$key, [System.IntPtr]::Zero)
+
+            #Write-Host $key
+            #[System.IntPtr]
+
+            [System.Win32Util]::SendNotifyMessage($hWnd, 0x100, $key, [System.IntPtr]::Zero)
+            #Start-Sleep -Milliseconds 100
+            [System.Win32Util]::SendNotifyMessage($hWnd, 0x101, $key, [System.IntPtr]::Zero)
+
 
         }
     }
@@ -58,6 +65,7 @@ $job = Start-Job -ScriptBlock {
     function Main {
 
         $Win32UtilMethodsDefinations = @"
+        
             [DllImport("user32.dll")]
             public static extern int DeleteMenu(IntPtr hWnd, int nPosition, int wFlag);
 
@@ -75,6 +83,11 @@ $job = Start-Job -ScriptBlock {
             [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
             [return: MarshalAs(UnmanagedType.Bool)]
             public static extern bool SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+            
+            [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool SendNotifyMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
             [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
             [return: MarshalAs(UnmanagedType.U2)]
@@ -108,12 +121,124 @@ $job = Start-Job -ScriptBlock {
                 WM_CAPTURECHANGED = 0x0215,
             }
 
+
+            
+            [DllImport("user32.dll", SetLastError = true)]
+            public static extern void keybd_event(byte bVk, byte bScan, int dwFlags, int dwExtraInfo);
+
+
+            [DllImport("user32.dll")]
+            public static extern IntPtr FindWindowEx(IntPtr parentWindow, IntPtr previousChildWindow, string windowClass, string windowTitle);
+
+
+            public static IntPtr[] GetProcessWindows(int process) {
+                List<IntPtr> apRet = new List<IntPtr>();
+                IntPtr pLast = IntPtr.Zero;
+                do {
+                    pLast = FindWindowEx(IntPtr.Zero, pLast, null, null);
+                    int iProcess_;
+                    GetWindowThreadProcessId(pLast, out iProcess_);
+                    if(iProcess_ == process) apRet.Add(pLast);
+                } while(pLast != IntPtr.Zero);
+
+                return apRet.ToArray();
+            }
+
+
+            const int GWL_EXSTYLE = (-20);
+            const uint WS_EX_APPWINDOW = 0x40000;
+
+            const uint WM_SHOWWINDOW = 0x0018;
+            const int SW_PARENTOPENING = 3;
+
+
+            [DllImport("user32.dll")]
+            private static extern bool EnumDesktopWindows(IntPtr hWnd, EnumWindowsProc procFunc, int lParam);
+                        
+            [DllImport("user32.dll")]
+            private static extern bool EnumChildWindows(IntPtr hWnd, EnumWindowsProc procFunc, int lParam);
+
+            [DllImport("user32.dll")]
+            static extern uint GetWindowThreadProcessId(IntPtr hWnd, out int lpdwProcessId);
+
+            [DllImport("user32.dll")]
+            private static extern uint GetWindowTextLength(IntPtr hWnd);
+
+            [DllImport("user32.dll")]
+            private static extern uint GetWindowText(IntPtr hWnd, StringBuilder lpString, uint nMaxCount);
+
+            [DllImport("user32.dll", CharSet = CharSet.Auto)]
+            static extern bool GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+
+            [DllImport("user32.dll")]
+            static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+            delegate bool EnumWindowsProc(IntPtr hWnd, int lParam);
+
+            static bool IsApplicationWindow(IntPtr hWnd) {
+              return (GetWindowLong(hWnd, GWL_EXSTYLE) & WS_EX_APPWINDOW) != 0;
+            }
+
+            public static IntPtr[] GetWindowHandle(int pid, string title) {
+              var result = IntPtr.Zero;
+              var outputResult = new List<IntPtr>();
+
+
+              EnumWindowsProc enumerateHandle = delegate(IntPtr hWnd, int lParam)
+              {
+                
+
+                int id;
+                GetWindowThreadProcessId(hWnd, out id);
+
+                if (pid == 0 || id == 0 || pid == id) {
+
+                  var clsName = new System.Text.StringBuilder(256);
+                  var hasClass = GetClassName(hWnd, clsName, 256);
+                  if (hasClass) {
+
+                    var maxLength = (int)GetWindowTextLength(hWnd);
+                    var builder = new System.Text.StringBuilder(maxLength + 1);
+                    
+                    //var maxLength = (int)GetWindowTextLength(hWnd);
+                    //var builder = new System.Text.StringBuilder(256);
+                    GetWindowText(hWnd, builder, (uint)builder.Capacity);
+
+                    var text = builder.ToString(); 
+                    var className = clsName.ToString();
+                    
+                    
+                    if (text.StartsWith(title) && className.StartsWith("L2UnrealWWindowsViewportWindow") && IsApplicationWindow(hWnd))
+                    {
+                      //outputResult.Add(text + ":" + hWnd + ":"+ className);
+                      outputResult.Add(hWnd);
+                      result = hWnd;
+
+                      if (outputResult.Count >= 30) return false;
+                    }
+
+                  }
+                  
+                }
+                return true;
+              };
+
+              EnumDesktopWindows(IntPtr.Zero, enumerateHandle, 0);
+
+              // return result;
+              return outputResult.ToArray();
+
+            }
+
 "@
 
+
         Add-Type -AssemblyName System.Windows.Forms
-        Add-Type -MemberDefinition $Win32UtilMethodsDefinations -Name Win32Util -Namespace System
+        Add-Type -MemberDefinition $Win32UtilMethodsDefinations -Name Win32Util -Namespace System -UsingNamespace @("System.Text", "System.Collections.Generic")
         
         $VK = [System.Windows.Forms.Keys]
+
+
         
         #=== Editable Setting ======================================
         $refreshL2WindowsEnabled = $true
@@ -140,21 +265,32 @@ $job = Start-Job -ScriptBlock {
         
 
         #=== Get L2 Process(es) ===
-        $l2Process = Get-Process -Name "L2.bin" -ErrorAction SilentlyContinue | Where-Object { [System.Win32Util]::IsIconic($_.MainWindowHandle) -eq $false }
+        #$l2Process = Get-Process -Name "L2.bin" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and [System.Win32Util]::IsIconic($_.MainWindowHandle) -eq $false }
         
-
-
+        
+        #Retrieve window handle by Title
+        $l2Process = @()
+        [System.Win32Util]::GetWindowHandle(0, "Lineage II") | ForEach-Object {
+            if ([System.Win32Util]::IsIconic($_) -eq $false) {
+                $l2Process += (NEW-OBJECT PSOBJECT -Property @{ MainWindowHandle=$_; })
+            }
+        }
+        
+        
         #=== Init Window ===        
         Write-Host "L2 Process: " @($l2Process).Count
         if ($l2Process -eq $null -or @($l2Process).Count -le 0) { return }
+        
 
         $l2Process | ForEach-Object {
             if ($_.MainWindowHandle -ne 0) {
                 Util-DisableMaxButton $_.MainWindowHandle
+                Write-Host $_.MainWindowHandle
             }
+            
         }
-        
 
+        
         $switchProgress = 0
         while($true) {
             
